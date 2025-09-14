@@ -1,0 +1,3 @@
+chainlit
+httpx
+python-dotenv

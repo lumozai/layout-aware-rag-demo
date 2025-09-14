@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Evidence Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: #007acc;
+            color: white;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        button {
+            background: rgba(255,255,255,0.2);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        .viewer-container {
+            position: relative;
+            padding: 20px;
+            text-align: center;
+            min-height: 600px;
+        }
+
+        #pdf-canvas {
+            border: 1px solid #ddd;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 100%;
+        }
+
+        #overlay {
+            position: absolute;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .evidence-pin {
+            position: absolute;
+            border: 2px solid #007acc;
+            background: rgba(0, 122, 204, 0.15);
+            border-radius: 4px;
+            animation: highlight 2s ease-in-out;
+        }
+
+        @keyframes highlight {
+            0%, 100% {
+                border-color: #007acc;
+                background: rgba(0, 122, 204, 0.15);
+            }
+            50% {
+                border-color: #ff6b35;
+                background: rgba(255, 107, 53, 0.25);
+                box-shadow: 0 0 20px rgba(255, 107, 53, 0.5);
+            }
+        }
+
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 400px;
+            font-size: 18px;
+            color: #666;
+        }
+
+        .error {
+            color: #d32f2f;
+            text-align: center;
+            padding: 40px;
+            font-size: 16px;
+        }
+
+        .info-panel {
+            background: #f8f9fa;
+            border-top: 1px solid #e0e0e0;
+            padding: 15px 20px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .zoom-controls {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        #zoom-level {
+            min-width: 60px;
+            text-align: center;
+            background: none;
+            border: none;
+            color: white;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📍 Evidence Pin Viewer</h1>
+            <div class="controls">
+                <button onclick="previousPage()">← Previous</button>
+                <span id="page-info">Page 1</span>
+                <button onclick="nextPage()">Next →</button>
+                <div class="zoom-controls">
+                    <button onclick="zoomOut()">-</button>
+                    <span id="zoom-level">100%</span>
+                    <button onclick="zoomIn()">+</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="viewer-container">
+            <div id="loading" class="loading">Loading PDF...</div>
+            <div id="error" class="error" style="display: none;"></div>
+            <canvas id="pdf-canvas" style="display: none;"></canvas>
+            <div id="overlay"></div>
+        </div>
+
+        <div class="info-panel">
+            <strong>Evidence Pin:</strong> The highlighted region shows the exact text used to support the AI's answer.
+            This ensures transparency and allows you to verify the source of information.
+        </div>
+    </div>
+
+    <script>
+        let pdfDoc = null;
+        let currentPage = 1;
+        let scale = 1.0;
+        let targetBbox = null;
+        let docId = null;
+
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        function getUrlParams() {
+            const params = new URLSearchParams(window.location.search);
+            return {
+                doc: params.get('doc'),
+                page: parseInt(params.get('page'), 10) || 1,
+                bbox: params.get('bbox')?.split(',').map(parseFloat) || null
+            };
+        }
+
+        function showError(message) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('error').textContent = message;
+        }
+
+        async function loadPDF() {
+            const params = getUrlParams();
+            docId = params.doc;
+            currentPage = params.page;
+            targetBbox = params.bbox;
+
+            if (!docId) {
+                showError('Document ID not provided');
+                return;
+            }
+
+            try {
+                const url = `/documents/${docId}.pdf`;
+                pdfDoc = await pdfjsLib.getDocument(url).promise;
+
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('pdf-canvas').style.display = 'block';
+
+                await renderPage();
+            } catch (error) {
+                showError(`Failed to load PDF: ${error.message}`);
+            }
+        }
+
+        async function renderPage() {
+            if (!pdfDoc) return;
+
+            try {
+                const page = await pdfDoc.getPage(currentPage);
+                const viewport = page.getViewport({ scale });
+
+                const canvas = document.getElementById('pdf-canvas');
+                const context = canvas.getContext('2d');
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                await page.render({
+                    canvasContext: context,
+                    viewport: viewport
+                }).promise;
+
+                updatePageInfo();
+                highlightEvidence(viewport);
+                updateZoomLevel();
+
+            } catch (error) {
+                showError(`Failed to render page: ${error.message}`);
+            }
+        }
+
+        function highlightEvidence(viewport) {
+            const overlay = document.getElementById('overlay');
+            const canvas = document.getElementById('pdf-canvas');
+
+            overlay.innerHTML = '';
+            overlay.style.left = canvas.offsetLeft + 'px';
+            overlay.style.top = canvas.offsetTop + 'px';
+            overlay.style.width = canvas.width + 'px';
+            overlay.style.height = canvas.height + 'px';
+
+            if (targetBbox && targetBbox.length === 4) {
+                // Docling bbox format: [left, top, right, bottom] in bottom-left coordinate system
+                // where top > bottom (top is higher Y value from bottom of page)
+                const [left, doclingTop, right, doclingBottom] = targetBbox;
+
+                // Convert to canvas coordinates (top-left origin)
+                const canvasX0 = left * scale;
+                const canvasX1 = right * scale;
+
+                // Convert Y coordinates from bottom-left to top-left origin
+                // doclingBottom is lower on page (smaller Y in bottom-left system)
+                // doclingTop is higher on page (larger Y in bottom-left system)
+                const canvasY0 = viewport.height - (doclingTop * scale);
+                const canvasY1 = viewport.height - (doclingBottom * scale);
+
+                const width = canvasX1 - canvasX0;
+                const height = canvasY1 - canvasY0;
+
+                if (width > 0 && height > 0) {
+                    const pin = document.createElement('div');
+                    pin.className = 'evidence-pin';
+                    pin.style.left = canvasX0 + 'px';
+                    pin.style.top = canvasY0 + 'px';
+                    pin.style.width = width + 'px';
+                    pin.style.height = height + 'px';
+
+                    overlay.appendChild(pin);
+                }
+            }
+        }
+
+        function updatePageInfo() {
+            const pageInfo = document.getElementById('page-info');
+            if (pdfDoc) {
+                pageInfo.textContent = `Page ${currentPage} of ${pdfDoc.numPages}`;
+            }
+        }
+
+        function updateZoomLevel() {
+            document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%';
+        }
+
+        async function previousPage() {
+            if (currentPage > 1) {
+                currentPage--;
+                await renderPage();
+            }
+        }
+
+        async function nextPage() {
+            if (pdfDoc && currentPage < pdfDoc.numPages) {
+                currentPage++;
+                await renderPage();
+            }
+        }
+
+        async function zoomIn() {
+            scale = Math.min(scale * 1.2, 3.0);
+            await renderPage();
+        }
+
+        async function zoomOut() {
+            scale = Math.max(scale / 1.2, 0.3);
+            await renderPage();
+        }
+
+        window.addEventListener('load', loadPDF);
+    </script>
+</body>
+</html>
