@@ -8,7 +8,7 @@ class ChunkData(BaseModel):
     page_num: int
     bbox: List[float]  # [x0, y0, x1, y1] as per article
     headings: List[str]
-    embedding: Optional[List[float]] = None  # 768 dimensions
+    embedding: Optional[List[float]] = None  # 384 dimensions
 
 
 class DocumentMeta(BaseModel):
